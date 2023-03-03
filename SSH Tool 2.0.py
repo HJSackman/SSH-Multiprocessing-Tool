@@ -4,17 +4,12 @@ import multiprocessing
 import socket
 import threading
 import time
-import tkinter.ttk
+from functools import partial
 from pathlib import Path
 from tkinter import filedialog
-
 import customtkinter as ctk
-from functools import partial
 import logging
-
-from typing import List, Generator, Iterable, Dict
-
-import openpyxl as openpyxl
+from typing import List, Iterable, Dict
 import paramiko
 import re
 
@@ -70,7 +65,8 @@ class Application(ctk.CTkFrame):
         self.ip_addresses_entry = ctk.CTkTextbox(self, wrap="none", )
         self.ip_addresses_entry.grid(row=2, column=1, pady=5, padx=(0, 10), sticky="NSEW")
 
-        # ip_addresses_file_button.configure(command=partial(update_entry_from_file, ip_addresses_entry))
+        self.ip_addresses_file_button.configure(command=partial(Application.update_entry_from_file,
+                                                                self.ip_addresses_entry))
 
         # Commands
         self.commands_label = ctk.CTkLabel(self, text="Commands:")
@@ -82,7 +78,8 @@ class Application(ctk.CTkFrame):
         self.commands_entry = ctk.CTkTextbox(self, wrap="none")
         self.commands_entry.grid(row=3, column=1, pady=5, padx=(0, 10), sticky="NSEW")
 
-        # commands_file_button.configure(command=partial(update_entry_from_file, commands_entry))
+        self.commands_file_button.configure(command=partial(Application.update_entry_from_file,
+                                                            self.commands_entry))
 
         # Submit
         self.submit_button = ctk.CTkButton(self, text="Run Commands", command=self.start_thread)
@@ -191,7 +188,13 @@ class Application(ctk.CTkFrame):
 
     def save_result_to_file(self):
         choice = self.file_choice.get()
+        # self.results = [{"Hostname": str, "Command": str, "Output": str, "Error": bool}, {...}, ]
         data = self.results
+
+        # Remove ugly escape sequences
+        for result in data:
+            result["Output"] = FileHandler.remove_escape_sequences(result["Output"])
+
         if len(data) == 0:
             return
         try:
@@ -202,13 +205,15 @@ class Application(ctk.CTkFrame):
     def enable_save_button(self, event, attempt=0):
         """Change the colour of the save button and allow it to be clicked"""
         # A file type must be selected and there must be data to save
-        if self.file_choice.get() != "File Type" and self.results is not None:
+        if (self.file_choice.get() != "File Type" or attempt == 1) and self.results is not None:
             self.save_file_button.configure(state="normal")
             self.save_file_button.destroy()
             self.save_file_button = ctk.CTkButton(self, text="Save", command=self.save_result_to_file)
             self.save_file_button.grid(row=4, column=5, padx=(0, 10), pady=(5, 10), sticky="NSEW")
             self.update()
 
+        if attempt == 0 and event is not None:
+            self.enable_save_button(event, 1)
 
     def update_output_widget(self, text):
         """Updates the output text widget to the given text"""
@@ -218,20 +223,24 @@ class Application(ctk.CTkFrame):
         self.output_text.configure(state="disable")
 
     @staticmethod
+    def update_entry_from_file(entry_widget):
+        # Uses selects a txt file from file explorer
+        data = FileHandler.open_text_file()
+        # Get the text currently in the box
+        current_text = entry_widget.get("1.0", "end").strip()
+        # Remove all text
+        entry_widget.delete("1.0", "end")
+        # Display the current text plus the new text
+        entry_widget.insert("1.0", f"{current_text}\n{data}".strip())
+
+    @staticmethod
     def format_to_text(data: Iterable[Dict]) -> str:
         formatted_text = ""
         for dictionary in data:
             formatted_text += f"{dictionary.get('Hostname')}:\n{dictionary.get('Output')}\n\n"
 
         # Remove some of the weird escape sequence characters so that the tkinter output window accepts it nicely
-        formatted_text = Application.remove_escape_sequences(formatted_text)
-        return formatted_text
-
-    @staticmethod
-    def remove_escape_sequences(text: str) -> str:
-        """Remove escape sequences using re"""
-        escape_seq_pattern = re.compile(r'\[\?2004[hl]|\[0m||\[01;34m')
-        formatted_text = escape_seq_pattern.sub('', text)
+        formatted_text = FileHandler.remove_escape_sequences(formatted_text)
         return formatted_text
 
 
@@ -253,7 +262,7 @@ class SSHMultiprocess:
         self.commands: List[str] = commands
         self.compiled_command: str = self.compile_commands()
         self.queue = multiprocessing.Queue()
-        self.results = None
+        self.results: None | Dict = None
 
     def compile_commands(self) -> str:
         """Compiles the list of commands into a single string"""
@@ -421,6 +430,14 @@ class FileHandler:
         return path
 
     @staticmethod
+    def file_explorer_open_from(filetypes: Iterable[tuple[str, str | list[str] | tuple[str, ...]]]) -> Path | str:
+        """Open file explorer and get user to select a file to open."""
+        path = filedialog.askopenfilename(title="Select File",
+                                          initialdir='.',
+                                          filetypes=filetypes, )
+        return path
+
+    @staticmethod
     def __write_to_csv(data: List[dict]):
         """Writes the given list of dictionaries to a .csv file using the first dict's keys as headers."""
         try:
@@ -457,6 +474,20 @@ class FileHandler:
         except PermissionError:
             raise FileHandlerException("Cannot open file, permission denied. Make sure the file is not already open.")
 
+    @staticmethod
+    def open_text_file() -> str:
+        file_path = FileHandler.file_explorer_open_from([("Text Documents", "*.txt"), ])
+        with open(file_path, 'r') as f:
+            data = f.read()
+        return data
+
+    @staticmethod
+    def remove_escape_sequences(text: str) -> str:
+        """Remove escape sequences using re"""
+        escape_seq_pattern = re.compile(r'\[\?2004[hl]|\[0m||\[01;34m')
+        formatted_text = escape_seq_pattern.sub('', text)
+        return formatted_text
+
 
 def test_file_handler():
     data = [
@@ -490,7 +521,7 @@ def main():
     ctk.set_default_color_theme("blue")
     root = ctk.CTk()
     app = Application(root, log=logger)
-    root.mainloop()
+    app.master.mainloop()
 
 
 if __name__ == '__main__':
