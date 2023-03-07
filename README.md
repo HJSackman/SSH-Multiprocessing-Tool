@@ -1,7 +1,7 @@
 # SSH-Multiprocessing-Tool
 
 ### Summary
-A tool that allows a user to connect to multiple hosts and issue commands over SSH. Uses a customtkinter GUI and multiprocessing.
+A tool that allows a user to connect to multiple hosts and issue commands over SSH. Uses a customtkinter GUI and multiprocessing. The 1.0 Version should work, but we recommend using the 2.0 edition.
 
 ### Usage
 * In the appropriate entry widgets, enter your username and password for the hosts you are connecting to. You must be able to use to same username/password combo for all hosts. The password is hidden.
