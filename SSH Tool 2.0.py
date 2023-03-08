@@ -13,6 +13,8 @@ from typing import List, Iterable, Dict
 import paramiko
 import re
 
+import psutil as psutil
+
 
 class Application(ctk.CTkFrame):
     def __init__(self, master, log):
@@ -257,7 +259,7 @@ class SSHMultiprocess:
                  password: str,
                  hosts: List[str],
                  commands: List[str],
-                 process_cap: int = 50,):
+                 process_cap: int = 50, ):
         """
 
         :param username: Username to log into the hosts.
@@ -390,7 +392,7 @@ class SSHMultiprocess:
         # Create list of all processes
         processes = self.create_processes()
         # Split them up into small groups based on the process cap
-        process_groups = [processes[x:x+self.process_cap] for x in range(0, len(processes), self.process_cap)]
+        process_groups = [processes[x:x + self.process_cap] for x in range(0, len(processes), self.process_cap)]
         # Run one group at a time to save memory
         for group in process_groups:
             self.run_processes(group)
@@ -498,6 +500,36 @@ class FileHandler:
         return formatted_text
 
 
+class SystemHandler:
+    @staticmethod
+    def get_total_memory() -> int | float:
+        """Returns total system memory in MB"""
+        return psutil.virtual_memory()[0] / 1000000
+
+    @staticmethod
+    def get_available_memory() -> int | float:
+        """Returns amount of available memory in MB"""
+        return psutil.virtual_memory()[1] / 1000000
+
+    @staticmethod
+    def calculate_availability(memory_usage, free_memory_margin=0.1) -> int:
+        """Calculates how many of a given process can run based on system availability.
+
+        :param memory_usage: Amount of memory the process uses in MB
+        :param free_memory_margin: Percent of memory to leave spare in the system - default=0.1 (10%)
+        :return: Number of processes that can run without capping memory
+        """
+        # Get total memory of system in MB
+        total_memory = SystemHandler.get_total_memory()
+        # Find (in MB), how much of a margin to NOT use - default is the last 10% of memory
+        margin = total_memory / free_memory_margin
+        # Get currently available memory
+        available_memory = SystemHandler.get_available_memory()
+        # Taking into account the margin, how many processes can run in the available memory
+        return (available_memory - margin) / memory_usage
+
+
+
 class WarningMessage(ctk.CTkFrame):
     # Set up master window
     def __init__(self, master, warning_heading: str = "An Error Has Occurred", warning_text: str = ''):
@@ -531,6 +563,11 @@ class WarningMessage(ctk.CTkFrame):
 
         self.grid(row=0, column=0)
 
+
+class SettingsMenu(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.master = master
 
 def test_file_handler():
     data = [
