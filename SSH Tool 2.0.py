@@ -106,7 +106,7 @@ class Application(ctk.CTkFrame):
         # Save Output to File
         self.file_choice = ctk.StringVar()
         self.file_choice.set("File Type")
-        # todo - expand options
+
         self.file_options = ["CSV", "Text"]
         self.file_choice_dropdown = ctk.CTkOptionMenu(self, values=self.file_options, variable=self.file_choice,
                                                       dynamic_resizing=False)
@@ -222,6 +222,14 @@ class Application(ctk.CTkFrame):
         self.output_text.insert("1.0", text)
         self.output_text.configure(state="disable")
 
+    """
+        def display_warning(self, warning_heading=None, warning_text=None):
+            window = ctk.CTk()
+            window.eval('tk::PlaceWindow . center')
+            warning_app = WarningMessage(master=window, warning_heading=warning_heading, warning_text=warning_text)
+            warning_app.master.mainloop()
+"""
+
     @staticmethod
     def update_entry_from_file(entry_widget):
         # Uses selects a txt file from file explorer
@@ -248,19 +256,22 @@ class SSHMultiprocess:
     def __init__(self, username: str,
                  password: str,
                  hosts: List[str],
-                 commands: List[str]):
+                 commands: List[str],
+                 process_cap: int = 50,):
         """
 
-        :param username: Username to log into the hosts
-        :param password: Password to log into the hosts
-        :param hosts: List of hostnames/IP addresses
-        :param commands: List of commands to run on the given host
+        :param username: Username to log into the hosts.
+        :param password: Password to log into the hosts.
+        :param hosts: List of hostnames/IP addresses.
+        :param commands: List of commands to run on the given host.
+        :param process_cap: Amount of processes to run concurrently - affects speed and memory usage.
         """
         self.username: str = username
         self.password: str = password
         self.hosts: List[str] = hosts
         self.commands: List[str] = commands
         self.compiled_command: str = self.compile_commands()
+        self.process_cap: int = process_cap
         self.queue = multiprocessing.Queue()
         self.results: None | Dict = None
 
@@ -294,6 +305,7 @@ class SSHMultiprocess:
     @staticmethod
     def run_processes(processes: List[multiprocessing.Process]):
         """Run the processes given and add their returns to self.queue"""
+
         # Start the processes
         for process in processes:
             process.start()
@@ -331,7 +343,7 @@ class SSHMultiprocess:
                 output_text = copy.deepcopy(stdout.read().decode())
 
                 # Add data to output dict
-                output["Output"] = self.clean_output(output_text)
+                output["Output"] = output_text
 
                 # Flush out and close the streams
                 stdout.flush()
@@ -371,20 +383,17 @@ class SSHMultiprocess:
         self.queue.put(output)
         client.close()
 
-    def clean_output(self, output) -> str:
-        """Removes any fluff that the device might return"""
-        # Start from where the user is mentioned
-        # Usually username@hostname#
-        start = output.find(self.username)
-        return output[start:]
-
     def start(self):
         """Create and run processes
         :return Iterable with dictionaries containing {"Hostname":str, "Command":str, "Output":str, "Error":bool}
         """
-        # Create and run processes
+        # Create list of all processes
         processes = self.create_processes()
-        self.run_processes(processes)
+        # Split them up into small groups based on the process cap
+        process_groups = [processes[x:x+self.process_cap] for x in range(0, len(processes), self.process_cap)]
+        # Run one group at a time to save memory
+        for group in process_groups:
+            self.run_processes(group)
 
         # Get data from queue
         output = []
@@ -489,6 +498,40 @@ class FileHandler:
         return formatted_text
 
 
+class WarningMessage(ctk.CTkFrame):
+    # Set up master window
+    def __init__(self, master, warning_heading: str = "An Error Has Occurred", warning_text: str = ''):
+        self.warning_heading = warning_heading
+        self.warning_text = warning_text
+        super().__init__(master)
+        self.master = master
+        self.master.title("Warning")
+        self.pack()
+
+        self.warning_label = ctk.CTkLabel(self,
+                                          text=self.warning_heading,
+                                          font=ctk.CTkFont(family="Roberto",
+                                                           weight="bold",
+                                                           size=25))
+
+        self.warning_label.pack(padx=5)
+
+        self.warning_text = ctk.CTkLabel(self,
+                                         text=self.warning_text,
+                                         font=ctk.CTkFont(family="Roberto",
+                                                          weight="normal",
+                                                          size=20))
+        self.warning_text.pack()
+
+    def configure_rows_and_columns(self):
+        self.master.rowconfigure(0, weight=1)
+        self.master.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.grid(row=0, column=0)
+
+
 def test_file_handler():
     data = [
         {"Hostname": '192.168.56.101',
@@ -526,4 +569,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # test_file_handler()
