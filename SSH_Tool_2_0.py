@@ -1,19 +1,21 @@
 import copy
 import csv
+import logging
 import multiprocessing
+import re
 import socket
 import threading
 import time
+import tkinter
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog
-import customtkinter as ctk
-import logging
 from typing import List, Iterable, Dict
-import paramiko
-import re
 
-import psutil as psutil
+import PIL
+import customtkinter as ctk
+import paramiko
+import psutil
 
 
 class Application(ctk.CTkFrame):
@@ -25,6 +27,16 @@ class Application(ctk.CTkFrame):
         self.threads = []
         # Used for updating the loading bar
         self.loading_bar_queue = multiprocessing.Queue()
+        # Default settings
+        self.settings = {
+            # Is the settings window open?
+            "Open": False,
+            # How much memory can the program use.
+            "Memory Usage": "AUTO",
+            # Forcefully close the SSH connections after x seconds, 0 means the connections will remain open.
+            "Force Stop": 0,
+        }
+        self.settings_window = None
 
         # Set up master window
         super().__init__(master)
@@ -119,7 +131,46 @@ class Application(ctk.CTkFrame):
         self.save_file_button = ctk.CTkButton(self, text="Save", command=self.save_result_to_file, hover=False)
         self.save_file_button.grid(row=4, column=5, padx=(0, 10), pady=(5, 10), sticky="NSEW")
         self.save_file_button.configure(state="disabled", fg_color="#3B3B3B", require_redraw=True, cursor='')
+
+        # Settings button
+        self.settings_button_img = ctk.CTkImage(PIL.Image.open(r"Data Files/cog-icon_grey2.png"), size=(40, 40))
+        self.settings_button = ctk.CTkButton(self, text='', command=self.open_settings, image=self.settings_button_img,
+                                             width=40, fg_color="transparent", bg_color="transparent", corner_radius=0,
+                                             height=40, border_spacing=0, hover_color="gray25")
+        # self.settings_button.grid(row=4, column=0, padx=10, pady=(5,10), sticky="NSEW")
+        self.settings_button.grid(row=0, column=5, sticky="E", padx=10)
         self.update()
+
+    def open_settings(self):
+        """Opens settings window"""
+        # If the window is not already open
+        if not self.settings.get("Open"):
+            new_root = ctk.CTkToplevel(self.master)
+            # When user clicks the close window button x, close the window safely
+            new_root.protocol("WM_DELETE_WINDOW", self.close_settings)
+            # Place the settings window on top
+            new_root.wm_attributes("-topmost", 1)
+
+            main_width = self.master.winfo_width()
+            main_height = self.master.winfo_height()
+            x = self.master.winfo_x() + (main_width // 2) - 200
+            y = self.master.winfo_y() + (main_height // 2) - 200
+            new_root.geometry(f"+{x}+{y}")
+            self.settings_window = SettingsMenu(new_root, self.settings)
+            self.settings["Open"] = True
+            new_root.mainloop()
+        else:
+            # Bring the settings window to the front
+            self.settings_window.lift()
+
+        print("Button clicked")
+
+    def close_settings(self):
+        """Closes settings window"""
+        if self.settings.get("Open"):
+            # Destroy the window
+            self.settings_window.master.destroy()
+            self.settings["Open"] = False
 
     def configure_columns(self):
         """Configure how the grid columns expand when the window expands"""
@@ -512,22 +563,30 @@ class SystemHandler:
         return psutil.virtual_memory()[1] / 1000000
 
     @staticmethod
-    def calculate_availability(memory_usage, free_memory_margin=0.1) -> int:
+    def calculate_availability(memory_usage, free_memory_margin=0.05) -> int:
         """Calculates how many of a given process can run based on system availability.
 
         :param memory_usage: Amount of memory the process uses in MB
-        :param free_memory_margin: Percent of memory to leave spare in the system - default=0.1 (10%)
+        :param free_memory_margin: Percent of memory to leave spare in the system - default=0.05 (5%)
         :return: Number of processes that can run without capping memory
         """
         # Get total memory of system in MB
         total_memory = SystemHandler.get_total_memory()
+        print(f"{total_memory=}")
         # Find (in MB), how much of a margin to NOT use - default is the last 10% of memory
-        margin = total_memory / free_memory_margin
+        margin = total_memory * free_memory_margin
+        print(f"{margin=}")
         # Get currently available memory
         available_memory = SystemHandler.get_available_memory()
+        print(f"{available_memory=}")
+        usable_memory = available_memory - margin
+        print(f"{usable_memory=}")
         # Taking into account the margin, how many processes can run in the available memory
-        return (available_memory - margin) / memory_usage
-
+        # Convert to int to round down to the nearest whole number
+        p = int(usable_memory / memory_usage)
+        if p < 0:
+            p = 0
+        return p
 
 
 class WarningMessage(ctk.CTkFrame):
@@ -565,9 +624,104 @@ class WarningMessage(ctk.CTkFrame):
 
 
 class SettingsMenu(ctk.CTkFrame):
-    def __init__(self, master):
+    def __init__(self, master, settings):
         super().__init__(master)
+        self.settings: dict = settings
+        """
+                self.settings = {
+                    # Is the settings window open?
+                    "Open": False,
+                    # How much memory can the program use.
+                    "Memory Usage": "AUTO",
+                    # Forcefully close the SSH connections after x seconds, 0 means the connections will remain open.
+                    "Force Stop": 0,
+                }
+                """
         self.master = master
+        self.master.title("Settings")
+        self.master.minsize(400, 400)
+        self.master.columnconfigure(0, weight=1)
+        self.master.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.grid()
+
+        self.heading_label = ctk.CTkLabel(self, text="SETTINGS")
+        self.heading_label.grid(row=0, column=0, columnspan=2, sticky="NSEW")
+
+        self.memory_label = ctk.CTkLabel(self, text="Memory")
+        self.memory_label.grid(row=1, column=0)
+        # Memory Checkbox
+
+        self.auto_memory_variable = tkinter.BooleanVar()
+
+        self.auto_memory_checkbox = ctk.CTkCheckBox(self, text="Auto", command=self.activate_auto_memory,
+                                                    variable=self.auto_memory_variable)
+        self.auto_memory_checkbox.grid(row=3, column=0)
+
+        self.memory_slider_variable = tkinter.DoubleVar()
+        self.memory_slider = ctk.CTkSlider(self, from_=100, to=SystemHandler.get_total_memory(),
+                                           variable=self.memory_slider_variable,
+                                           command=self.slider_changed, )
+        self.memory_slider.grid(row=2, column=1)
+
+        self.memory_slider_entry_var = tkinter.StringVar()
+        self.memory_slider_entry_var.set("100MB")
+        self.memory_slider_entry = ctk.CTkEntry(self, placeholder_text='100MB')
+        self.memory_slider_entry.grid(row=3, column=1)
+
+        self.save_button = ctk.CTkButton(self, text="Save", command=self.save)
+        self.save_button.grid(row=4, column=0, columnspan=2, pady=(20, 5))
+
+        if self.settings.get("Memory Usage") == "AUTO":
+            self.auto_memory_variable.set(True)
+            self.activate_auto_memory()
+        else:
+            self.auto_memory_variable.set(False)
+
+    def slider_changed(self, _=None):
+        self.memory_slider_entry.configure(placeholder_text=f"{self.memory_slider_variable.get():.0f}MB")
+        self.update()
+
+    def activate_auto_memory(self):
+        self.memory_slider_variable.set(SystemHandler.calculate_availability(45)*45)
+        self.slider_changed()
+        self.blur_memory_bar()
+
+    def blur_memory_bar(self):
+        """Disables and alters colouring of the memory slider and entry widgets"""
+        print(self.auto_memory_variable.get())
+        if self.auto_memory_variable.get():
+            print("Blur")
+            # Blur the slider
+            self.memory_slider.configure(state='disabled')
+            self.memory_slider_entry.configure(state='disabled')
+        else:
+            print("Unblur")
+            # Un-blur the slider
+            self.memory_slider.configure(state='normal')
+            self.memory_slider_entry.configure(state='normal')
+
+        self.update()
+
+    def save(self):
+        """
+        self.settings = {
+            # Is the settings window open?
+            "Open": False,
+            # How much memory can the program use.
+            "Memory Usage": "AUTO",
+            # Forcefully close the SSH connections after x seconds, 0 means the connections will remain open.
+            "Force Stop": 0,
+        }
+        """
+        self.settings = {
+            "Open": True,
+            "Memory Usage": self.memory_slider_variable.get()
+
+        }
+
+
 
 def test_file_handler():
     data = [
@@ -601,6 +755,7 @@ def main():
     ctk.set_default_color_theme("blue")
     root = ctk.CTk()
     app = Application(root, log=logger)
+    # app = SettingsMenu(root)
     app.master.mainloop()
 
 
